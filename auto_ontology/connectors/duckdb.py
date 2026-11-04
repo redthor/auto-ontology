@@ -154,30 +154,47 @@ class DuckDBDatabase(SQLDatabase):
     # ------------------------------------------------------------------
 
     def get_tables(self) -> pd.DataFrame:
-        """Return all tables from information_schema as a DataFrame."""
+        """Return all tables as a DataFrame, with their ``COMMENT ON`` text.
+
+        Comments are not in ``information_schema``; ``duckdb_tables()`` and
+        ``duckdb_views()`` carry them, so they are joined in by name.
+        """
         return self.execute(
             """
+            WITH comments AS (
+                SELECT schema_name, table_name, comment FROM duckdb_tables()
+                UNION ALL
+                SELECT schema_name, view_name, comment FROM duckdb_views()
+            )
             SELECT
-                table_schema,
-                table_name
-            FROM information_schema.tables
-            ORDER BY table_schema, table_name
+                t.table_schema,
+                t.table_name,
+                c.comment AS description
+            FROM information_schema.tables AS t
+            LEFT JOIN comments AS c
+                ON c.schema_name = t.table_schema AND c.table_name = t.table_name
+            ORDER BY t.table_schema, t.table_name
         """
         )
 
     def get_columns(self) -> pd.DataFrame:
-        """Return all columns from information_schema as a DataFrame."""
+        """Return all columns as a DataFrame, with their ``COMMENT ON`` text."""
         return self.execute(
             """
             SELECT
-                table_schema,
-                table_name,
-                column_name,
-                data_type,
-                is_nullable = 'YES' AS is_nullable,
-                ordinal_position
-            FROM information_schema.columns
-            ORDER BY table_schema, table_name, ordinal_position
+                c.table_schema,
+                c.table_name,
+                c.column_name,
+                c.data_type,
+                c.is_nullable = 'YES' AS is_nullable,
+                c.ordinal_position,
+                d.comment AS description
+            FROM information_schema.columns AS c
+            LEFT JOIN duckdb_columns() AS d
+                ON d.schema_name = c.table_schema
+                AND d.table_name = c.table_name
+                AND d.column_name = c.column_name
+            ORDER BY c.table_schema, c.table_name, c.ordinal_position
         """
         )
 
