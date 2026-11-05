@@ -171,7 +171,11 @@ class PostgresVDB:
 
         self._engine: Optional[PGEngine] = None
         self._store: Optional[PGVectorStore] = None
-        self.vector_size: Optional[int] = kwargs.get("vector_size", 2048)
+        # Must equal the embedding model's output size; EMBED_DIMENSIONS sets it
+        # for models that do not emit the 2048 the Nemotron default does.
+        self.vector_size: Optional[int] = kwargs.get(
+            "vector_size", int(os.environ.get("EMBED_DIMENSIONS") or 2048)
+        )
         # Resetting the database embeddings prior to ingestion
         # In order to support without recreate:
         # 1. The ingestion should return which tables/columns were added/updated/deleted

@@ -130,3 +130,22 @@ def test_no_hits_makes_no_request(server: Server) -> None:
         rerank_hits("q", [], rerank_invoke_url="http://x/rerank", model_name="m") == []
     )
     assert seen == []
+
+
+def test_the_embed_backend_ranks_by_cosine_similarity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    vectors = {"fruit": [1.0, 0.0], "apples": [0.9, 0.1], "bananas": [0.0, 1.0]}
+
+    def _embed(texts: list[str], params: Any, input_type: str) -> list[Any]:
+        return [vectors.get(t) for t in texts]
+
+    monkeypatch.setattr(rerank, "embed_texts", _embed)
+    monkeypatch.setattr(rerank, "get_embed_params", lambda: None)
+    hits = [{"id": "b", "text": "bananas"}, {"id": "a", "text": "apples"}]
+
+    ranked = rerank_hits(
+        "fruit", hits, rerank_invoke_url="embed", model_name="", top_n=1
+    )
+
+    assert [hit["id"] for hit in ranked] == ["a"]

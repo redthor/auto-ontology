@@ -16,14 +16,22 @@ the URL, and each built-in default uses a different one:
   ``rankings[].logit``.
 
 Any other URL is treated as a NIM base and gets ``/v1/ranking`` appended.
+
+``RERANK_ENDPOINT=embed`` skips the ranking service: hits are scored by cosine
+similarity of their embeddings to the query's, using the configured EMBED
+endpoint. Weaker than a cross-encoder, but it needs no extra model and nothing
+leaves the embedding host.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
+import math
+
 import httpx
 
+from auto_ontology.utils.embedding import embed_texts, get_embed_params
 from auto_ontology.utils.model_config import resolve
 
 # Hosted NeMo reranking endpoint — no local GPU required. Override RERANK_ENDPOINT
@@ -34,6 +42,9 @@ _RERANK_MODEL = resolve("RERANK", "MODEL")
 _RERANK_API_KEY = resolve("RERANK", "API_KEY")
 
 _TIMEOUT_S = 30.0
+
+# RERANK_ENDPOINT value that selects embedding-similarity scoring.
+_EMBED_BACKEND = "embed"
 
 
 def get_rerank_kwargs() -> dict[str, str]:
@@ -50,6 +61,22 @@ def _ranking_url(endpoint: str) -> str:
     if url.endswith(("/reranking", "/ranking", "/rerank")):
         return url
     return f"{url}/v1/ranking"
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    norm = math.hypot(*a) * math.hypot(*b)
+    return sum(x * y for x, y in zip(a, b)) / norm if norm else float("-inf")
+
+
+def _embedding_scores(query: str, documents: list[str]) -> list[float]:
+    """Cosine similarity of each document to *query*; ``-inf`` if not embeddable."""
+    params = get_embed_params()
+    (query_vec,) = embed_texts([query], params, "query")
+    doc_vecs = embed_texts(documents, params, "passage")
+    return [
+        _cosine(query_vec, vec) if query_vec and vec else float("-inf")
+        for vec in doc_vecs
+    ]
 
 
 def _scores(
@@ -111,13 +138,17 @@ def rerank_hits(
     """
     if not hits:
         return hits
-    scores = _scores(
-        query,
-        [str(hit.get(text_key) or "") for hit in hits],
-        url=_ranking_url(rerank_invoke_url),
-        model_name=model_name,
-        api_key=api_key,
-    )
+    documents = [str(hit.get(text_key) or "") for hit in hits]
+    if rerank_invoke_url.strip().lower() == _EMBED_BACKEND:
+        scores = _embedding_scores(query, documents)
+    else:
+        scores = _scores(
+            query,
+            documents,
+            url=_ranking_url(rerank_invoke_url),
+            model_name=model_name,
+            api_key=api_key,
+        )
     ranked = sorted(
         ({"_rerank_score": score, **hit} for hit, score in zip(hits, scores)),
         key=lambda hit: hit["_rerank_score"],
